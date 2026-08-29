@@ -2,8 +2,8 @@
 # The package itself declares ranges in pyproject.toml; this file pins the
 # verified set for reproducible local development and the test suite.
 #
-# Re-verify before adopting newer releases (see doc/enterprizesolutions/
-# TRD_ENTERPRISE_RAG_MCP_CORE.md §Pinned Versions in the universityDemo repo).
+# Re-verify before adopting newer releases (see
+# docs/TRD_ENTERPRISE_RAG_MCP_CORE.md §Pinned Versions).
 
 # Core
 httpx==0.28.1

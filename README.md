@@ -5,9 +5,12 @@ Standalone, pluggable **Enterprise RAG/MCP Core Engine** — hybrid retrieval
 cache, PDF/table ingestion, and an MCP server (OIDC or no-auth).
 
 Implemented from the verified design blueprint
-`TRD_ENTERPRISE_RAG_MCP_CORE.md` (v2026.5) in the `universityDemo` repository.
-Every design claim was verified against the exact pinned SDK versions listed in
-`requirements-dev.txt`.
+[`docs/TRD_ENTERPRISE_RAG_MCP_CORE.md`](docs/TRD_ENTERPRISE_RAG_MCP_CORE.md)
+(v2026.5). Every design claim was verified against the exact pinned SDK
+versions listed in `requirements-dev.txt`. See
+[`docs/ent-solution-status.md`](docs/ent-solution-status.md) for the current
+status and [`docs/ent-chat-context.md`](docs/ent-chat-context.md) for project
+context.
 
 ## Quick start
 
@@ -101,4 +104,4 @@ reranker, RedisVL cache, MCP boot) preserve the original design-doc assertions.
 
 ## License
 
-Proprietary.
+Proprietary — all rights reserved. See [LICENSE.md](LICENSE.md).
