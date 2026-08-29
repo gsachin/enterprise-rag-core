@@ -42,7 +42,9 @@ class EngineConfig:
     resource_server_url: str = "http://127.0.0.1:8000/mcp"
     default_tenant: str = "default"
     default_clearance: int = 0
+    embed_backend: str = "auto"             # auto | ollama | mlx (OpenAI-compatible /v1/embeddings)
     ollama_url: str | None = None
+    mlx_base_url: str | None = None         # e.g. http://127.0.0.1:8000/v1
     embed_model: str | None = None
     alpha: float = 0.3
     rrf_k: int = 60
@@ -71,7 +73,9 @@ class EngineConfig:
             oidc_audience=_get("RAG_CORE_OIDC_AUDIENCE"),
             default_tenant=_get("RAG_CORE_DEFAULT_TENANT", "default") or "default",
             default_clearance=int(_get("RAG_CORE_DEFAULT_CLEARANCE", "0") or 0),
+            embed_backend=_get("RAG_CORE_EMBED_BACKEND", "auto") or "auto",
             ollama_url=_get("OLLAMA_URL"),
+            mlx_base_url=_get("RAG_CORE_MLX_BASE_URL"),
             embed_model=_get("EMBED_MODEL"),
         )
 
@@ -101,13 +105,33 @@ class EngineConfig:
             MultiTenantSemanticCache,
             NoOpSemanticCache,
         )
-        from enterprise_rag.hybrid import AsyncParallelHybridEngine, OllamaEmbeddingClient
+        from enterprise_rag.hybrid import (
+            AsyncParallelHybridEngine,
+            OllamaEmbeddingClient,
+            OpenAICompatibleEmbeddingClient,
+        )
         from enterprise_rag.orchestrator import AtomicAgentContextOrchestrator
         from enterprise_rag.reranker import NoOpReranker, ONNXVoiceReranker
 
-        embeddings = OllamaEmbeddingClient(
-            base_url=self.ollama_url, model=self.embed_model,
-        )
+        embed_backend = self.embed_backend.lower()
+        if embed_backend == "auto":
+            embed_backend = _detect_embed_backend()
+        if embed_backend == "ollama":
+            embeddings = OllamaEmbeddingClient(
+                base_url=self.ollama_url, model=self.embed_model,
+            )
+        elif embed_backend == "mlx":
+            # mlx-lm serves chat only; embeddings come from an OpenAI-compatible
+            # MLX embedding server (vllm-mlx, mlx-serve, mlx-omni-server, ...).
+            if not self.embed_model:
+                raise ValueError("EMBED_MODEL is required for embed_backend=mlx "
+                                 "(auto-selected on macOS Apple Silicon)")
+            embeddings = OpenAICompatibleEmbeddingClient(
+                base_url=self.mlx_base_url or "http://127.0.0.1:8000/v1",
+                model=self.embed_model,
+            )
+        else:
+            raise ValueError(f"unknown embed_backend: {self.embed_backend!r}")
 
         clients: list[Any] = []
 
@@ -194,6 +218,18 @@ class EngineConfig:
             orchestrator=orchestrator,
             clients=clients,
         )
+
+
+def _detect_embed_backend() -> str:
+    """Machine-aware embedding backend: MLX on macOS Apple Silicon (where
+    mlx-lm runs and CUDA does not), Ollama everywhere else (CUDA/Linux/
+    Windows). Mirrors the universityDemo launcher's LLM_PROVIDER=auto rule."""
+    import platform
+    import sys
+
+    if sys.platform == "darwin" and platform.machine() == "arm64":
+        return "mlx"
+    return "ollama"
 
 
 @dataclass

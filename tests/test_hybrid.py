@@ -1,12 +1,20 @@
 """Hybrid engine composition tests: dense+BM25 over in-memory stores (no
-infra), dense-only when the keyword leg is absent, and fusion semantics."""
+infra), dense-only when the keyword leg is absent, and fusion semantics.
+Also: the OpenAI-compatible embeddings client (the MLX backend) request
+shape — hermetic, no live server."""
 import asyncio
 
+import httpx
 import pytest
 
 from enterprise_rag.model import Chunk, UpsertRecord
 from enterprise_rag.security import SecurityContext
-from enterprise_rag.hybrid import AsyncParallelHybridEngine, fuse_wrrf, _wrrf
+from enterprise_rag.hybrid import (
+    AsyncParallelHybridEngine,
+    OpenAICompatibleEmbeddingClient,
+    fuse_wrrf,
+    _wrrf,
+)
 from enterprise_rag.adapters.memory_vector import InMemoryVectorStore
 from enterprise_rag.adapters.bm25_memory import BM25KeywordStore
 
@@ -76,3 +84,47 @@ def test_fuse_wrrf_semantics():
     assert abs(_wrrf(0) - 1 / 60) < 1e-12
     single = fuse_wrrf([c1], [c3], alpha=0.5)
     assert len(single) == 2 and all(c.score > 0 for c in single)
+
+
+# ── OpenAI-compatible embeddings client (MLX backend) ─────────────────────
+
+class _FakeResponse:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._payload
+
+
+def test_openai_client_embed_request_shape(monkeypatch):
+    captured = {}
+
+    async def fake_post(self, url, json=None, **kwargs):
+        captured["url"] = url
+        captured["json"] = json
+        return _FakeResponse({"data": [{"embedding": [0.1, 0.2, 0.3]}]})
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+    client = OpenAICompatibleEmbeddingClient("http://127.0.0.1:8000/v1/", "bge-small")
+    vec = asyncio.run(client.embed("hello"))
+    assert vec == [0.1, 0.2, 0.3]
+    assert captured["url"] == "http://127.0.0.1:8000/v1/embeddings"   # trailing slash normalized
+    assert captured["json"] == {"model": "bge-small", "input": "hello"}
+
+
+def test_openai_client_embed_sync_request_shape(monkeypatch):
+    captured = {}
+
+    def fake_post(self, url, json=None, **kwargs):
+        captured["url"] = url
+        captured["json"] = json
+        return _FakeResponse({"data": [{"embedding": [1.0]}]})
+
+    monkeypatch.setattr(httpx.Client, "post", fake_post)
+    client = OpenAICompatibleEmbeddingClient("http://127.0.0.1:8000/v1", "bge-small")
+    vec = client.embed_sync("probe")
+    assert vec == [1.0]
+    assert captured["json"] == {"model": "bge-small", "input": "probe"}

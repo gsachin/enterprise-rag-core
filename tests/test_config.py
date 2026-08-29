@@ -27,6 +27,8 @@ def test_from_env_reads_rag_core_matrix(monkeypatch):
         "RAG_CORE_AUTH_MODE": "oidc",
         "RAG_CORE_OIDC_ISSUER": "https://iam.example.com/oauth2",
         "RAG_CORE_OIDC_AUDIENCE": "enterprise-rag-core",
+        "RAG_CORE_EMBED_BACKEND": "mlx",
+        "RAG_CORE_MLX_BASE_URL": "http://127.0.0.1:8080/v1",
         "OLLAMA_URL": "http://ollama:11434",
         "EMBED_MODEL": "nomic-embed-text",
     }
@@ -44,6 +46,8 @@ def test_from_env_reads_rag_core_matrix(monkeypatch):
     assert cfg.oidc_audience == env["RAG_CORE_OIDC_AUDIENCE"]
     assert cfg.ollama_url == "http://ollama:11434"
     assert cfg.embed_model == "nomic-embed-text"
+    assert cfg.embed_backend == "mlx"
+    assert cfg.mlx_base_url == "http://127.0.0.1:8080/v1"
 
 
 def test_from_env_defaults():
@@ -52,6 +56,7 @@ def test_from_env_defaults():
     assert cfg.keyword_backend == "bm25"
     assert cfg.cache_backend == "none"
     assert cfg.auth_mode == "none"
+    assert cfg.embed_backend == "auto"      # machine-aware resolution at build time
     assert cfg.default_tenant == "default"
     assert cfg.default_clearance == 0
 
@@ -73,6 +78,61 @@ def test_build_stack_rejects_unknown_backends():
         EngineConfig(keyword_backend="sphinx").build_stack()
     with pytest.raises(ValueError, match="cache_backend"):
         EngineConfig(cache_backend="sphinx").build_stack()
+    with pytest.raises(ValueError, match="embed_backend"):
+        EngineConfig(embed_backend="sphinx").build_stack()
+
+
+def test_build_stack_mlx_requires_embed_model():
+    with pytest.raises(ValueError, match="EMBED_MODEL"):
+        EngineConfig(embed_backend="mlx").build_stack()
+
+
+def test_build_stack_auto_detects_mlx_on_apple_silicon(monkeypatch):
+    import platform
+    import sys
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(platform, "machine", lambda: "arm64")
+    stack = EngineConfig(
+        embed_backend="auto", embed_model="bge-small",
+        vector_backend="memory", keyword_backend="none", cache_backend="none",
+        rerank_model_path="definitely/not/here.onnx",
+    ).build_stack()
+    assert stack.embeddings.__class__.__name__ == "OpenAICompatibleEmbeddingClient"
+
+
+def test_build_stack_auto_detects_ollama_on_cuda_machines(monkeypatch):
+    import platform
+    import sys
+
+    monkeypatch.setattr(sys, "platform", "linux")     # CUDA machine
+    monkeypatch.setattr(platform, "machine", lambda: "x86_64")
+    stack = EngineConfig(
+        embed_backend="auto",
+        vector_backend="memory", keyword_backend="none", cache_backend="none",
+        rerank_model_path="definitely/not/here.onnx",
+    ).build_stack()
+    assert stack.embeddings.__class__.__name__ == "OllamaEmbeddingClient"
+
+
+def test_build_stack_mlx_selects_openai_compatible_client():
+    from enterprise_rag.hybrid import OpenAICompatibleEmbeddingClient
+
+    stack = EngineConfig(
+        embed_backend="mlx", embed_model="BAAI/bge-small-en-v1.5",
+        vector_backend="memory", keyword_backend="none", cache_backend="none",
+        rerank_model_path="definitely/not/here.onnx",
+    ).build_stack()
+    assert isinstance(stack.embeddings, OpenAICompatibleEmbeddingClient)
+    assert stack.embeddings._base_url == "http://127.0.0.1:8000/v1"
+    assert stack.embeddings._model == "BAAI/bge-small-en-v1.5"
+
+    stack2 = EngineConfig(
+        embed_backend="mlx", embed_model="m", mlx_base_url="http://127.0.0.1:9999/v1",
+        vector_backend="memory", keyword_backend="none", cache_backend="none",
+        rerank_model_path="definitely/not/here.onnx",
+    ).build_stack()
+    assert stack2.embeddings._base_url == "http://127.0.0.1:9999/v1"
 
 
 def test_build_stack_requires_urls_for_sdk_backends():

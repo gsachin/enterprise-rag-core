@@ -48,6 +48,40 @@ class OllamaEmbeddingClient:
         return resp.json()["embedding"]
 
 
+class OpenAICompatibleEmbeddingClient:
+    """Embeddings from an OpenAI-compatible ``/v1/embeddings`` endpoint.
+
+    This is the MLX backend on Apple Silicon: mlx-lm serves chat only, so
+    embeddings come from a separate MLX embedding server (vllm-mlx,
+    mlx-serve, mlx-omni-server, ...) — all of which speak the OpenAI
+    ``{"model": ..., "input": ...}`` -> ``data[0].embedding`` shape. Works
+    with any other OpenAI-compatible embeddings endpoint too.
+    """
+
+    def __init__(self, base_url: str, model: str):
+        self._base_url = base_url.rstrip("/")     # e.g. http://127.0.0.1:8000/v1
+        self._model = model
+
+    async def embed(self, text: str) -> list[float]:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{self._base_url}/embeddings",
+                json={"model": self._model, "input": text},
+            )
+            resp.raise_for_status()
+        return list(resp.json()["data"][0]["embedding"])
+
+    def embed_sync(self, text: str) -> list[float]:
+        """Sync variant — dimension probes at construction time. Loop-independent."""
+        with httpx.Client(timeout=10.0) as client:
+            resp = client.post(
+                f"{self._base_url}/embeddings",
+                json={"model": self._model, "input": text},
+            )
+            resp.raise_for_status()
+        return list(resp.json()["data"][0]["embedding"])
+
+
 # ── Weighted RRF fusion ────────────────────────────────────────────────
 
 def _wrrf(rank: int, k: int = 60) -> float:
