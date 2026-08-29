@@ -86,6 +86,24 @@ async def _orchestrator() -> object:
     return agent_orchestrator
 
 
+# ── Engine seam ────────────────────────────────────────────────────────────
+# Wired by build_app() alongside the orchestrator (replaced in tests).
+agent_engine = None
+
+
+def _set_engine(engine) -> None:
+    global agent_engine
+    agent_engine = engine
+
+
+async def _engine() -> object:
+    if agent_engine is None:
+        raise RuntimeError(
+            "server not wired — call build_app() (or set server.agent_engine)"
+        )
+    return agent_engine
+
+
 # ── Tool: OIDC mode ───────────────────────────────────────────────────────
 
 async def execute_agent_context(
@@ -113,6 +131,65 @@ async def execute_agent_context(
     )
     result = await (await _orchestrator()).execute_agent_context(req)
     return json.dumps(result, indent=2)
+
+
+# ── Tool: generic retrieval (OIDC mode) ────────────────────────────────────
+
+def _chunks_payload(chunks) -> dict:
+    return {
+        "chunks": [
+            {
+                "chunk_id": c.chunk_id,
+                "parent_id": c.parent_id,
+                "tenant_id": c.tenant_id,
+                "section_title": c.section_title,
+                "content": c.content,
+                "score": c.score,
+                "required_clearance": c.required_clearance,
+                "department": c.department,
+            }
+            for c in chunks
+        ],
+        "count": len(chunks),
+        "hit_source": "retrieval",
+    }
+
+
+async def retrieve_context(
+    query: str,
+    top_k: int = 5,
+    ctx: Context | None = None,     # SDK-injected; excluded from the input schema
+) -> str:
+    """Retrieves tenant-scoped context chunks for a question (hybrid dense +
+    keyword legs). Requires OAuth2 bearer token with rag:retrieve."""
+    token = get_access_token()
+    if token is None:               # e.g. stdio transport — refuses rather than fabricating identity
+        raise ValueError("unauthenticated: this tool requires an OAuth2 bearer access token")
+    security = security_from_token(token)
+
+    chunks = await (await _engine()).retrieve_parallel(query, security, top_k)
+    return json.dumps(_chunks_payload(chunks), indent=2)
+
+
+# ── Tool: generic retrieval (none auth mode) ───────────────────────────────
+
+def _make_none_auth_retrieve_tool(config: EngineConfig):
+    """Tool variant for ``none`` auth mode: no bearer token, every request
+    runs as the configured default tenant. Same input schema as the OIDC
+    tool."""
+
+    async def retrieve_context_defaults(
+        query: str,
+        top_k: int = 5,
+        ctx: Context | None = None,
+    ) -> str:
+        """Retrieves tenant-scoped context chunks for a question (hybrid dense
+        + keyword legs). No-auth mode: runs as the configured default tenant."""
+        chunks = await (await _engine()).retrieve_parallel(
+            query, config.default_security(), top_k)
+        return json.dumps(_chunks_payload(chunks), indent=2)
+
+    return retrieve_context_defaults
 
 
 # ── Tool: none auth mode ──────────────────────────────────────────────────
@@ -174,9 +251,11 @@ def build_mcp(config: EngineConfig | None = None) -> MCPServer:
             ),
         )
         mcp.add_tool(execute_agent_context)
+        mcp.add_tool(retrieve_context)
     else:
         mcp = MCPServer(name="enterprise-rag-core")
-        mcp.add_tool(_make_none_auth_tool(config))
+        mcp.add_tool(_make_none_auth_tool(config), name="execute_agent_context")
+        mcp.add_tool(_make_none_auth_retrieve_tool(config), name="retrieve_context")
     return mcp
 
 
@@ -188,6 +267,7 @@ def build_app(config: EngineConfig | None = None):
     config = config or EngineConfig.from_env()
     stack = config.build_stack()
     _set_orchestrator(stack.orchestrator)
+    _set_engine(stack.engine)
     mcp = build_mcp(config)
     app = mcp.streamable_http_app(streamable_http_path="/mcp")
     app.state.stack = stack
