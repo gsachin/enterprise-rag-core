@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 from enterprise_rag import prepopulate
+from enterprise_rag.warmup import warm_keyword_from_vector_store
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 MODEL_DIR = _REPO_ROOT / "models" / "reranker"
@@ -70,6 +71,12 @@ def cmd_serve(args: argparse.Namespace) -> int:
     import uvicorn
 
     app = build_app(EngineConfig.from_env())
+    if os.environ.get("RAG_CORE_WARM_KEYWORD", "1") != "0":
+        warmed = asyncio.run(warm_keyword_from_vector_store(app.state.stack))
+        if warmed:
+            print(f"keyword leg warmed with {warmed} chunks")
+        else:
+            print("keyword leg warm-up: vector store is empty (prepopulate first)")
     print(
         f"enterprise-rag-core MCP on http://{args.host}:{args.port}/mcp "
         f"(auth={app.state.stack.config.auth_mode}, "
@@ -98,6 +105,10 @@ def cmd_serve_stdio(args: argparse.Namespace) -> int:
 
     async def run() -> None:
         try:
+            if os.environ.get("RAG_CORE_WARM_KEYWORD", "1") != "0":
+                warmed = await warm_keyword_from_vector_store(stack)
+                if warmed:
+                    print(f"keyword leg warmed with {warmed} chunks", file=sys.stderr)
             await mcp.run_stdio_async()
         finally:
             await stack.aclose()

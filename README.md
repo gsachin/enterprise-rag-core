@@ -61,6 +61,7 @@ Environment variables (all `RAG_CORE_*`):
 | `RAG_CORE_EMBED_BACKEND` | `auto` | `auto` \| `ollama` \| `mlx` — auto picks MLX on macOS Apple Silicon, Ollama elsewhere |
 | `RAG_CORE_MLX_BASE_URL` | `http://127.0.0.1:8000/v1` | OpenAI-compatible MLX embedding server (vllm-mlx, mlx-serve, ...) |
 | `OLLAMA_URL` / `EMBED_MODEL` | `http://localhost:11434` / `nomic-embed-text` | Ollama embedding endpoint (app-compatible); `EMBED_MODEL` is also the model name for `mlx` |
+| `RAG_CORE_WARM_KEYWORD` | `1` | Repopulate the in-memory BM25 keyword leg from the vector store at service boot |
 
 ## Usage as a library
 
@@ -87,6 +88,34 @@ chunks = await stack.engine.retrieve_parallel("leadership rubric", sec, top_k=5)
 
 Extracts text and tables (dual representation: structured JSON + markdown
 matrix), chunks, embeds, and upserts into the configured vector + keyword legs.
+
+## Markdown KB prepopulation
+
+Build the retrieval DBs from a markdown corpus (`## ` headings become
+sections; idempotent — reruns skip unless `--force`):
+
+```bash
+.venv/Scripts/enterprise-rag-core prepopulate --kb kb.md \
+    --doc-id meridian-kb --tenant default \
+    --required-marker "meridian university" --blocked-marker fafsa
+# or: .venv/Scripts/python -m enterprise_rag.prepopulate --kb kb.md ...
+```
+
+Chunk ids are deterministic (`{doc_id}:s{section}:c{chunk}`), so a rebuild
+from the same corpus is stable.
+
+## One-shot launcher (Windows)
+
+```powershell
+.\start_services.ps1                          # venv self-heal + Redis + serve :8010
+.\start_services.ps1 -KbPath <kb.md>          # + prepopulate (idempotent)
+.\start_services.ps1 -KbPath <kb.md> -WithTunnel   # + public quick tunnel
+```
+
+The launcher self-heals the venv, starts Redis Stack (compose), checks Ollama
+(`nomic-embed-text`), downloads the reranker model if missing, prepopulates
+the DBs if the doc is absent, warms the BM25 leg, and serves the MCP server —
+warn-only degradation for optional infra, hard exit only for core failures.
 
 ## Optional infrastructure (docker compose)
 

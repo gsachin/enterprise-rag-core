@@ -24,6 +24,7 @@ semantic cache, live MCP boot). Revision log (17 rows) lives in the TRD.
 | 4 | CLI (`download-model`, `serve`, `serve-stdio`) | 65 passed |
 | 5 | PDF ingestion (dual representation: structured JSON + markdown matrix) + `ingest` CLI + docker-compose.yml | 67 passed |
 | 6 | Redis Stack tests against live Docker container | 69 passed, 0 skipped |
+| 7 | Generic `retrieve_context` MCP tool + engine seam, markdown KB prepopulation (idempotent, marker-gated), `get_all` protocol growth, BM25 boot warm-up, Windows launcher `start_services.ps1` | 88 passed |
 
 **Current suite: 69 passed, 0 skipped** (with Redis Stack running; without it,
 the 2 redis-marked tests auto-skip). Model-dependent reranker tests auto-skip
