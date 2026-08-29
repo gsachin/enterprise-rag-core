@@ -34,8 +34,12 @@ until `enterprise-rag-core download-model` has run.
   tree verified byte-identical to the local build before re-pointing.
 - Design docs moved here (`docs/`); `universityDemo` keeps a pointer.
 - LICENSE: all rights reserved (public repo, proprietary code).
-- CI: GitHub Actions runs the full suite on Python 3.11/3.12 with a Redis
-  Stack service container.
+- CI: GitHub Actions runs the full suite on Python 3.11/3.12 (ubuntu +
+  windows), Redis Stack started via docker run (auto-skip where no engine;
+  Windows runners don't support service containers).
+- MLX embeddings backend: `RAG_CORE_EMBED_BACKEND=auto` picks MLX
+  (OpenAI-compatible `/v1/embeddings`) on macOS Apple Silicon and Ollama
+  elsewhere.
 
 ## ⏳ PENDING / NOT DONE
 
