@@ -26,6 +26,9 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Start Redis Stack
+        shell: bash    # Git Bash ships on GitHub Windows runners; bash's ||
+                       # semantics are the same everywhere (pwsh behaves
+                       # differently with native-command failures).
         run: docker run -d --name rag-redis-stack -p 6379:6379 redis/redis-stack-server:latest || echo "Redis Stack unavailable - redis-marked tests will skip"
 
       - name: Install package with dev extras
