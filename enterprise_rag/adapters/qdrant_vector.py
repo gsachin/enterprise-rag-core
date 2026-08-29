@@ -113,3 +113,24 @@ class QdrantVectorStore:
         if ids:
             await self._client.delete(collection_name=self._collection, points_selector=ids)
         return len(ids)
+
+    async def get_all(self, tenant_id: str) -> list[Chunk]:
+        chunks: list[Chunk] = []
+        offset = None
+        while True:
+            page = await self._client.scroll(
+                collection_name=self._collection,
+                scroll_filter=qm.Filter(
+                    must=[qm.FieldCondition(
+                        key="tenant_id", match=qm.MatchValue(value=tenant_id))],
+                ),
+                with_payload=True,
+                with_vectors=False,
+                limit=1000,
+                offset=offset,
+            )
+            points, offset = page
+            chunks.extend(_payload_to_chunk(p, 0.0) for p in points)
+            if offset is None:
+                break
+        return chunks

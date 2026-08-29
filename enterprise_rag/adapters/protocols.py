@@ -34,6 +34,11 @@ class VectorStore(Protocol):
         """Delete all chunks belonging to a parent; returns the count removed."""
         ...
 
+    async def get_all(self, tenant_id: str) -> list[Chunk]:
+        """All chunks of one tenant (bulk export — BM25 warm-up, prepopulate
+        idempotency checks)."""
+        ...
+
 
 class KeywordStore(Protocol):
     """Sparse/keyword leg (BM25 or Elasticsearch)."""

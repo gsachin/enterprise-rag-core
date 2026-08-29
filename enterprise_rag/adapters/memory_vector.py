@@ -49,3 +49,10 @@ class InMemoryVectorStore:
         for cid in doomed:
             del self._records[cid]
         return len(doomed)
+
+    async def get_all(self, tenant_id: str) -> list[Chunk]:
+        return [
+            rec.to_chunk()
+            for rec, _vec in self._records.values()
+            if rec.tenant_id == tenant_id
+        ]

@@ -111,3 +111,15 @@ class ChromaVectorStore:
         if ids:
             self._collection.delete(ids=ids)
         return len(ids)
+
+    async def get_all(self, tenant_id: str) -> list[Chunk]:
+        res = self._collection.get(
+            where={self._tenant_field: {"$eq": tenant_id}},
+            include=["documents", "metadatas"],
+        )
+        out = []
+        for i, chunk_id in enumerate(res.get("ids") or []):
+            meta = (res.get("metadatas") or [])[i] or {}
+            doc = (res.get("documents") or [])[i] or ""
+            out.append(_to_chunk(chunk_id, doc, meta, 0.0))
+        return out
