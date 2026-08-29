@@ -4,6 +4,8 @@ Commands:
   download-model   Fetch the INT8 MiniLM reranker ONNX (22 MiB, Hugging Face)
   serve            Streamable-HTTP MCP server (:8000/mcp)
   serve-stdio      stdio MCP transport (no auth layer — none-auth mode)
+  ingest           Extract, chunk, embed, upsert a PDF document
+  prepopulate      Build/prepopulate DBs from a markdown knowledge base
 """
 import argparse
 import asyncio
@@ -11,6 +13,8 @@ import os
 import shutil
 import sys
 from pathlib import Path
+
+from enterprise_rag import prepopulate
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 MODEL_DIR = _REPO_ROOT / "models" / "reranker"
@@ -154,6 +158,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_ingest.add_argument("--department", default=None, help="Optional department scope")
     p_ingest.add_argument("--clearance", type=int, default=0, help="Required clearance level (default 0)")
     p_ingest.set_defaults(func=cmd_ingest)
+
+    p_prep = sub.add_parser("prepopulate", help="Build/prepopulate DBs from a markdown knowledge base")
+    p_prep.add_argument("--kb", required=True, help="Path to the markdown knowledge base")
+    p_prep.add_argument("--doc-id", default="meridian-kb", help="Deterministic doc id (chunk ids derive from it)")
+    p_prep.add_argument("--tenant", default="default", help="Tenant the doc belongs to")
+    p_prep.add_argument("--department", default=None, help="Optional department scope")
+    p_prep.add_argument("--clearance", type=int, default=0, help="Required clearance level (default 0)")
+    p_prep.add_argument("--required-marker", action="append", default=[],
+                        help="Substring that must appear in the corpus (repeatable)")
+    p_prep.add_argument("--blocked-marker", action="append", default=[],
+                        help="Substring that must NOT appear (fatal if present; repeatable)")
+    p_prep.add_argument("--force", action="store_true", help="Replace existing chunks instead of skipping")
+    p_prep.add_argument("--chunk-size", type=int, default=600)
+    p_prep.add_argument("--chunk-overlap", type=int, default=90)
+    p_prep.set_defaults(func=prepopulate.cmd_prepopulate)
 
     return parser
 
