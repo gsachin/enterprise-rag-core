@@ -20,15 +20,21 @@ class OllamaEmbeddingClient:
     """Concrete default: Ollama nomic-embed-text (mirrors EMBED_MODEL of the
     repository this design is archived in)."""
 
-    def __init__(self, base_url: str | None = None, model: str | None = None):
+    def __init__(self, base_url: str | None = None, model: str | None = None, *,
+                 transport: httpx.AsyncBaseTransport | None = None,
+                 sync_transport: httpx.BaseTransport | None = None):
         import os
 
         self._base_url = base_url or os.environ.get("OLLAMA_URL", "http://localhost:11434")
         self._model = model or os.environ.get("EMBED_MODEL", "nomic-embed-text")
+        # Transport seams are test-only hooks (httpx.MockTransport); production
+        # passes nothing and gets default transports.
+        self._transport = transport
+        self._sync_transport = sync_transport
 
     async def embed(self, text: str) -> list[float]:
         # target: <= 6 ms p95 (warm model, local network)
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=5.0, transport=self._transport) as client:
             resp = await client.post(
                 f"{self._base_url}/api/embeddings",
                 json={"model": self._model, "prompt": text},
@@ -39,7 +45,7 @@ class OllamaEmbeddingClient:
     def embed_sync(self, text: str) -> list[float]:
         """Sync variant — for components that must probe vector dimensions at
         construction time (the §5 RedisVL CustomVectorizer). Loop-independent."""
-        with httpx.Client(timeout=5.0) as client:
+        with httpx.Client(timeout=5.0, transport=self._sync_transport) as client:
             resp = client.post(
                 f"{self._base_url}/api/embeddings",
                 json={"model": self._model, "prompt": text},
@@ -58,12 +64,18 @@ class OpenAICompatibleEmbeddingClient:
     with any other OpenAI-compatible embeddings endpoint too.
     """
 
-    def __init__(self, base_url: str, model: str):
+    def __init__(self, base_url: str, model: str, *,
+                 transport: httpx.AsyncBaseTransport | None = None,
+                 sync_transport: httpx.BaseTransport | None = None):
         self._base_url = base_url.rstrip("/")     # e.g. http://127.0.0.1:8000/v1
         self._model = model
+        # Transport seams are test-only hooks (httpx.MockTransport); production
+        # passes nothing and gets default transports.
+        self._transport = transport
+        self._sync_transport = sync_transport
 
     async def embed(self, text: str) -> list[float]:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=10.0, transport=self._transport) as client:
             resp = await client.post(
                 f"{self._base_url}/embeddings",
                 json={"model": self._model, "input": text},
@@ -73,7 +85,7 @@ class OpenAICompatibleEmbeddingClient:
 
     def embed_sync(self, text: str) -> list[float]:
         """Sync variant — dimension probes at construction time. Loop-independent."""
-        with httpx.Client(timeout=10.0) as client:
+        with httpx.Client(timeout=10.0, transport=self._sync_transport) as client:
             resp = client.post(
                 f"{self._base_url}/embeddings",
                 json={"model": self._model, "input": text},

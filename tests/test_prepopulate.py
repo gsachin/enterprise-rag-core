@@ -45,6 +45,7 @@ def _stack(monkeypatch):
     return EngineConfig(
         vector_backend="memory", keyword_backend="bm25", cache_backend="none",
         rerank_model_path="definitely/not/here.onnx",
+        embed_backend="ollama",     # machine-independent: auto resolves mlx on macOS
     ).build_stack()
 
 

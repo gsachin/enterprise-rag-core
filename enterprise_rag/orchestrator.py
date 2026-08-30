@@ -4,7 +4,14 @@ Direct Context Injections (Resume, JD, ...) are fetched by deterministic
 ingestion ids through the VectorStore adapter, then merged with tenant-scoped
 rubric retrieval (semantic-cache-gated), reranked, and emitted as a U-shape
 context envelope.
+
+Realtime-readiness (Phase 0): the sync ``rerank`` call is CPU-bound ONNX
+inference, so it runs in a worker thread (``asyncio.to_thread``); every stage
+is timed with ``time.perf_counter`` and reported in ``timings_ms`` so a
+concurrent voice server can measure per-stage latency in production.
 """
+import asyncio
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -38,6 +45,8 @@ class AtomicAgentContextOrchestrator:
         self._default_direct_ids = direct_chunk_ids
 
     async def execute_agent_context(self, req: AgentContextRequest) -> dict[str, Any]:
+        t_start = time.perf_counter()
+
         # 1. Direct candidate chunks via deterministic ingestion ids.
         #    get_by_ids() is an id lookup WITHOUT query filters, so tenant_id is
         #    re-verified post-fetch inside the adapter — never trust ids alone.
@@ -51,12 +60,15 @@ class AtomicAgentContextOrchestrator:
                       tenant_id=req.sec_ctx.tenant_id, content=text, score=1.0)
                 for i, text in enumerate(req.direct_context.values())
             ]
+        t_direct = time.perf_counter()
 
         # 2. Rubric retrieval with semantic cache. The cache holds rubric
         #    provenance ONLY: direct chunks vary per request, so caching the
         #    full envelope would poison responses across candidates.
         query_vector = await self._retriever.embed_query(req.rubric_query)
+        t_embed = time.perf_counter()
         cached = await self._cache.get(query_vector, req.sec_ctx.tenant_id, self._schema_version)
+        t_cache = time.perf_counter()
         if cached is not None:
             rubric_chunks = [Chunk(**c) for c in cached["chunks"]]
             hit_source = "cache"
@@ -73,17 +85,37 @@ class AtomicAgentContextOrchestrator:
                 query_text=req.rubric_query,
             )
             hit_source = "retrieval"
+        t_retrieval = time.perf_counter()
 
         # 3. Synthesize direct context + retrieved rubrics; rerank the pool.
-        final_chunks = self._reranker.rerank(req.rubric_query, direct_chunks + rubric_chunks)
+        #    ONNX inference is CPU-bound sync — offload from the event loop.
+        final_chunks = await asyncio.to_thread(
+            self._reranker.rerank, req.rubric_query, direct_chunks + rubric_chunks,
+        )
+        t_rerank = time.perf_counter()
 
         # 4. U-shape formatted context output.
+        envelope = ContextFormatter.format_u_shape(final_chunks, req.sec_ctx)
+        t_end = time.perf_counter()
+
+        def _ms(a: float, b: float) -> float:
+            return round((b - a) * 1000, 3)
+
         return {
             "status": "SUCCESS",
             "hit_source": hit_source,
-            "context_envelope": ContextFormatter.format_u_shape(final_chunks, req.sec_ctx),
+            "context_envelope": envelope,
             "provenance": [
                 {"chunk_id": c.chunk_id, "source": c.parent_id, "score": round(c.score, 4)}
                 for c in final_chunks
             ],
+            "timings_ms": {
+                "direct": _ms(t_start, t_direct),
+                "embed": _ms(t_direct, t_embed),
+                "cache": _ms(t_embed, t_cache),
+                "retrieval": _ms(t_cache, t_retrieval),
+                "rerank": _ms(t_retrieval, t_rerank),
+                "format": _ms(t_rerank, t_end),
+                "total": _ms(t_start, t_end),
+            },
         }

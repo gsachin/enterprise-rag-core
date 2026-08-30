@@ -20,6 +20,15 @@ from enterprise_rag.security import SecurityContext
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_MODEL_PATH = _REPO_ROOT / "models" / "reranker" / "minilm-int8.onnx"
 
+# Default OpenAI-compatible base URLs per embed backend. All three speak the
+# same {"model": ..., "input": ...} -> data[0].embedding contract, so they
+# share OpenAICompatibleEmbeddingClient; only the endpoint differs.
+_EMBED_BASE_URL_DEFAULTS = {
+    "mlx": "http://127.0.0.1:8000/v1",      # vllm-mlx / mlx-serve / mlx-omni-server
+    "vllm": "http://127.0.0.1:8000/v1",     # vLLM embedding endpoint (--task embed)
+    "openai": "https://api.openai.com/v1",  # any OpenAI-compatible API
+}
+
 
 @dataclass
 class EngineConfig:
@@ -42,9 +51,10 @@ class EngineConfig:
     resource_server_url: str = "http://127.0.0.1:8000/mcp"
     default_tenant: str = "default"
     default_clearance: int = 0
-    embed_backend: str = "auto"             # auto | ollama | mlx (OpenAI-compatible /v1/embeddings)
+    embed_backend: str = "auto"             # auto | ollama | mlx | vllm | openai
     ollama_url: str | None = None
-    mlx_base_url: str | None = None         # e.g. http://127.0.0.1:8000/v1
+    mlx_base_url: str | None = None         # legacy mlx-specific base URL
+    embed_base_url: str | None = None       # generic override for mlx/vllm/openai
     embed_model: str | None = None
     alpha: float = 0.3
     rrf_k: int = 60
@@ -76,6 +86,7 @@ class EngineConfig:
             embed_backend=_get("RAG_CORE_EMBED_BACKEND", "auto") or "auto",
             ollama_url=_get("OLLAMA_URL"),
             mlx_base_url=_get("RAG_CORE_MLX_BASE_URL"),
+            embed_base_url=_get("RAG_CORE_EMBED_BASE_URL"),
             embed_model=_get("EMBED_MODEL"),
         )
 
@@ -120,14 +131,19 @@ class EngineConfig:
             embeddings = OllamaEmbeddingClient(
                 base_url=self.ollama_url, model=self.embed_model,
             )
-        elif embed_backend == "mlx":
+        elif embed_backend in ("mlx", "vllm", "openai"):
             # mlx-lm serves chat only; embeddings come from an OpenAI-compatible
-            # MLX embedding server (vllm-mlx, mlx-serve, mlx-omni-server, ...).
+            # embedding server (vllm-mlx, mlx-serve, mlx-omni-server, ...) — the
+            # exact /v1/embeddings contract vLLM's embedding endpoint and the
+            # OpenAI API itself speak, so all three share one client.
             if not self.embed_model:
-                raise ValueError("EMBED_MODEL is required for embed_backend=mlx "
-                                 "(auto-selected on macOS Apple Silicon)")
+                raise ValueError(
+                    f"EMBED_MODEL is required for embed_backend={self.embed_backend!r}"
+                )
             embeddings = OpenAICompatibleEmbeddingClient(
-                base_url=self.mlx_base_url or "http://127.0.0.1:8000/v1",
+                base_url=self.embed_base_url
+                or (self.mlx_base_url if embed_backend == "mlx" else None)
+                or _EMBED_BASE_URL_DEFAULTS[embed_backend],
                 model=self.embed_model,
             )
         else:
@@ -221,15 +237,33 @@ class EngineConfig:
 
 
 def _detect_embed_backend() -> str:
-    """Machine-aware embedding backend: MLX on macOS Apple Silicon (where
-    mlx-lm runs and CUDA does not), Ollama everywhere else (CUDA/Linux/
-    Windows). Mirrors the universityDemo launcher's LLM_PROVIDER=auto rule."""
+    """Machine-aware embedding backend (OS auto-configuration). The explicit
+    ``RAG_CORE_EMBED_BACKEND`` always wins; ``auto`` resolves by machine class:
+
+    - macOS Apple Silicon -> ``mlx`` (mlx-lm native; CUDA unavailable)
+    - NVIDIA GPU present   -> ``vllm`` (CUDA-native OpenAI-compatible server)
+    - otherwise            -> ``ollama`` (CPU-friendly, runs everywhere)
+    """
     import platform
     import sys
 
     if sys.platform == "darwin" and platform.machine() == "arm64":
         return "mlx"
+    if _has_nvidia_gpu():
+        return "vllm"
     return "ollama"
+
+
+def _has_nvidia_gpu() -> bool:
+    """Stdlib NVIDIA presence probe: the Linux driver procfs marker or
+    ``nvidia-smi`` on PATH. Never raises — an absent probe means "no GPU",
+    and an explicit ``RAG_CORE_EMBED_BACKEND`` overrides the guess."""
+    import os
+    import shutil
+
+    if os.path.exists("/proc/driver/nvidia/version"):
+        return True
+    return shutil.which("nvidia-smi") is not None
 
 
 @dataclass

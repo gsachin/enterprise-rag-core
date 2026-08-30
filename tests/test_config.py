@@ -73,11 +73,11 @@ def test_default_security():
 
 def test_build_stack_rejects_unknown_backends():
     with pytest.raises(ValueError, match="vector_backend"):
-        EngineConfig(vector_backend="sphinx").build_stack()
+        EngineConfig(vector_backend="sphinx", embed_backend="ollama").build_stack()
     with pytest.raises(ValueError, match="keyword_backend"):
-        EngineConfig(keyword_backend="sphinx").build_stack()
+        EngineConfig(keyword_backend="sphinx", embed_backend="ollama").build_stack()
     with pytest.raises(ValueError, match="cache_backend"):
-        EngineConfig(cache_backend="sphinx").build_stack()
+        EngineConfig(cache_backend="sphinx", embed_backend="ollama").build_stack()
     with pytest.raises(ValueError, match="embed_backend"):
         EngineConfig(embed_backend="sphinx").build_stack()
 
@@ -101,18 +101,37 @@ def test_build_stack_auto_detects_mlx_on_apple_silicon(monkeypatch):
     assert stack.embeddings.__class__.__name__ == "OpenAICompatibleEmbeddingClient"
 
 
-def test_build_stack_auto_detects_ollama_on_cuda_machines(monkeypatch):
+def test_build_stack_auto_detects_ollama_on_cpu_machines(monkeypatch):
     import platform
     import sys
 
-    monkeypatch.setattr(sys, "platform", "linux")     # CUDA machine
+    monkeypatch.setattr(sys, "platform", "linux")     # CPU machine
     monkeypatch.setattr(platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr("enterprise_rag.config._has_nvidia_gpu", lambda: False)
     stack = EngineConfig(
         embed_backend="auto",
         vector_backend="memory", keyword_backend="none", cache_backend="none",
         rerank_model_path="definitely/not/here.onnx",
     ).build_stack()
     assert stack.embeddings.__class__.__name__ == "OllamaEmbeddingClient"
+
+
+def test_build_stack_auto_detects_vllm_on_gpu_machines(monkeypatch):
+    import platform
+    import sys
+
+    monkeypatch.setattr(sys, "platform", "linux")     # CUDA machine
+    monkeypatch.setattr(platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr("enterprise_rag.config._has_nvidia_gpu", lambda: True)
+    from enterprise_rag.hybrid import OpenAICompatibleEmbeddingClient
+
+    stack = EngineConfig(
+        embed_backend="auto", embed_model="BAAI/bge-small-en-v1.5",
+        vector_backend="memory", keyword_backend="none", cache_backend="none",
+        rerank_model_path="definitely/not/here.onnx",
+    ).build_stack()
+    assert isinstance(stack.embeddings, OpenAICompatibleEmbeddingClient)
+    assert stack.embeddings._base_url == "http://127.0.0.1:8000/v1"   # vLLM default
 
 
 def test_build_stack_mlx_selects_openai_compatible_client():
@@ -137,15 +156,17 @@ def test_build_stack_mlx_selects_openai_compatible_client():
 
 def test_build_stack_requires_urls_for_sdk_backends():
     with pytest.raises(ValueError, match="RAG_CORE_QDRANT_URL"):
-        EngineConfig(vector_backend="qdrant").build_stack()
+        EngineConfig(vector_backend="qdrant", embed_backend="ollama").build_stack()
     with pytest.raises(ValueError, match="RAG_CORE_ES_URL"):
-        EngineConfig(keyword_backend="elasticsearch").build_stack()
+        EngineConfig(keyword_backend="elasticsearch", embed_backend="ollama").build_stack()
     with pytest.raises(ValueError, match="RAG_CORE_REDIS_URL"):
-        EngineConfig(cache_backend="redisvl").build_stack()
+        EngineConfig(cache_backend="redisvl", embed_backend="ollama").build_stack()
 
 
 def test_build_stack_chroma_constructs_collection(tmp_path):
-    stack = EngineConfig(vector_backend="chroma", chroma_path=str(tmp_path)).build_stack()
+    stack = EngineConfig(
+        vector_backend="chroma", chroma_path=str(tmp_path), embed_backend="ollama",
+    ).build_stack()
     assert stack.vector_store.__class__.__name__ == "ChromaVectorStore"
     asyncio.run(stack.aclose())
 
@@ -154,6 +175,7 @@ def test_build_stack_no_model_falls_back_to_noop_reranker(monkeypatch):
     cfg = EngineConfig(
         vector_backend="memory", keyword_backend="none", cache_backend="none",
         rerank_model_path="definitely/not/here.onnx",
+        embed_backend="ollama",     # machine-independent: auto resolves mlx on macOS
     )
     stack = cfg.build_stack()
     assert stack.reranker.__class__.__name__ == "NoOpReranker"
@@ -174,6 +196,7 @@ def test_zero_infra_stack_end_to_end(monkeypatch):
     cfg = EngineConfig(
         vector_backend="memory", keyword_backend="bm25", cache_backend="memory",
         default_tenant="acme", rerank_model_path="definitely/not/here.onnx",
+        embed_backend="ollama",     # machine-independent: auto resolves mlx on macOS
     )
     stack = cfg.build_stack()
 

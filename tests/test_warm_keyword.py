@@ -24,6 +24,7 @@ def _stack(tmp_path, monkeypatch):
         vector_backend="chroma", chroma_path=str(tmp_path),
         chroma_collection="kbstore", keyword_backend="bm25", cache_backend="none",
         rerank_model_path="definitely/not/here.onnx", default_tenant="acme",
+        embed_backend="ollama",     # machine-independent: auto resolves mlx on macOS
     ).build_stack()
 
 
@@ -54,3 +55,50 @@ def test_warm_repopulates_fresh_keyword_leg(tmp_path, monkeypatch):
 def test_warm_empty_store_returns_zero(tmp_path, monkeypatch):
     stack = _stack(tmp_path, monkeypatch)
     assert _run(warm_keyword_from_vector_store(stack)) == 0
+
+
+# ── Phase 0: warm scope selection ─────────────────────────────────────────
+
+KB_BETA = "## Scholarships\nThe merit scholarship is $4,000 per term.\n"
+
+
+def _populate(tmp_path, monkeypatch):
+    """Prepopulate two tenants (acme + beta) into a persistent chroma store."""
+    kb = tmp_path / "kb.md"
+    kb.write_text(KB, encoding="utf-8")
+    kb_beta = tmp_path / "kb-beta.md"
+    kb_beta.write_text(KB_BETA, encoding="utf-8")
+    stack = _stack(tmp_path, monkeypatch)
+    acme = _run(prepopulate(stack, kb, doc_id="kb", tenant_id="acme"))
+    beta = _run(prepopulate(stack, kb_beta, doc_id="kb-beta", tenant_id="beta"))
+    assert not acme.skipped and not beta.skipped
+    return acme, beta
+
+
+def _search_all(stack, sec, query):
+    return _run(stack.keyword_store.search(query, sec, 10))
+
+
+def test_warm_all_tenants_repopulates_every_tenant(tmp_path, monkeypatch):
+    acme, beta = _populate(tmp_path, monkeypatch)
+
+    # fresh process: same persistent chroma, brand-new BM25 leg
+    stack2 = _stack(tmp_path, monkeypatch)
+    warmed = _run(warm_keyword_from_vector_store(stack2, tenants="all"))
+    assert warmed == acme.chunks + beta.chunks
+
+    acme_sec = SecurityContext("u1", "acme", [], [], 0, [])
+    beta_sec = SecurityContext("u2", "beta", [], [], 0, [])
+    assert any("$18,500" in h.content for h in _search_all(stack2, acme_sec, "tuition"))
+    assert any("$4,000" in h.content for h in _search_all(stack2, beta_sec, "scholarship"))
+
+
+def test_warm_default_scope_ignores_other_tenants(tmp_path, monkeypatch):
+    acme, _beta = _populate(tmp_path, monkeypatch)
+
+    stack2 = _stack(tmp_path, monkeypatch)
+    warmed = _run(warm_keyword_from_vector_store(stack2))   # default scope
+    assert warmed == acme.chunks
+
+    beta_sec = SecurityContext("u2", "beta", [], [], 0, [])
+    assert _search_all(stack2, beta_sec, "scholarship") == []

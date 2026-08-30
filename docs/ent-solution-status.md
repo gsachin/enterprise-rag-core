@@ -25,8 +25,9 @@ semantic cache, live MCP boot). Revision log (17 rows) lives in the TRD.
 | 5 | PDF ingestion (dual representation: structured JSON + markdown matrix) + `ingest` CLI + docker-compose.yml | 67 passed |
 | 6 | Redis Stack tests against live Docker container | 69 passed, 0 skipped |
 | 7 | Generic `retrieve_context` MCP tool + engine seam, markdown KB prepopulation (idempotent, marker-gated), `get_all` protocol growth, BM25 boot warm-up, Windows launcher `start_services.ps1` | 88 passed |
+| 8 | **Phase 0 realtime-readiness** (see `docs/TRD_PHASE0_REALTIME_READINESS.md`): event-loop offload (`asyncio.to_thread`) for Chroma SDK calls, BM25 scoring/rebuild, memory-vector + in-memory cache cosine, and ONNX rerank; per-stage `timings_ms` instrumentation; `list_tenants` protocol growth + warm-all-tenants; embedding backend matrix `mlx`/`vllm`/`openai` + OS auto-configuration (MLX on Apple Silicon, vLLM with NVIDIA GPU, Ollama elsewhere); 50-session concurrency smoke; test-suite machine-independence fixes | 114 passed, 0 skipped |
 
-**Current suite: 69 passed, 0 skipped** (with Redis Stack running; without it,
+**Current suite: 114 passed, 0 skipped** (with Redis Stack running; without it,
 the 2 redis-marked tests auto-skip). Model-dependent reranker tests auto-skip
 until `enterprise-rag-core download-model` has run.
 
@@ -38,9 +39,10 @@ until `enterprise-rag-core download-model` has run.
 - CI: GitHub Actions runs the full suite on Python 3.11/3.12 (ubuntu +
   windows), Redis Stack started via docker run (auto-skip where no engine;
   Windows runners don't support service containers).
-- MLX embeddings backend: `RAG_CORE_EMBED_BACKEND=auto` picks MLX
-  (OpenAI-compatible `/v1/embeddings`) on macOS Apple Silicon and Ollama
-  elsewhere.
+- Embeddings auto-configuration: `RAG_CORE_EMBED_BACKEND=auto` picks MLX
+  (OpenAI-compatible `/v1/embeddings`) on macOS Apple Silicon, vLLM where an
+  NVIDIA GPU is detected (stdlib probe), and Ollama elsewhere. Explicit
+  `ollama | mlx | vllm | openai` always wins over auto.
 
 ## ⏳ PENDING / NOT DONE
 

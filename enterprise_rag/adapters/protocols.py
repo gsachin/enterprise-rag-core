@@ -39,6 +39,11 @@ class VectorStore(Protocol):
         idempotency checks)."""
         ...
 
+    async def list_tenants(self) -> list[str]:
+        """Distinct tenant ids present in the store (bulk admin — warm-all,
+        migrations)."""
+        ...
+
 
 class KeywordStore(Protocol):
     """Sparse/keyword leg (BM25 or Elasticsearch)."""

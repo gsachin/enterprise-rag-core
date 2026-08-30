@@ -32,6 +32,16 @@ def build_qdrant_filter(sec_ctx: SecurityContext) -> qm.Filter:
     return qm.Filter(must=must, should=should)
 
 
+def _distinct_tenant_ids(points: list[Any]) -> list[str]:
+    """Pure helper (unit-tested without a live server): distinct tenant ids
+    from scrolled point payloads."""
+    return sorted({
+        str(payload.get("tenant_id", ""))
+        for point in points
+        if (payload := (point.payload or {})) and payload.get("tenant_id")
+    })
+
+
 def _payload_to_chunk(point: Any, score: float = 0.0) -> Chunk:
     payload = point.payload or {}
     return Chunk(
@@ -134,3 +144,21 @@ class QdrantVectorStore:
             if offset is None:
                 break
         return chunks
+
+    async def list_tenants(self) -> list[str]:
+        """Distinct tenant ids across the collection (bulk admin — warm-all,
+        migrations). Unfiltered scroll, payload limited to ``tenant_id``."""
+        tenants: set[str] = set()
+        offset = None
+        while True:
+            page, offset = await self._client.scroll(
+                collection_name=self._collection,
+                with_payload=qm.PayloadSelectorInclude(include=["tenant_id"]),
+                with_vectors=False,
+                limit=1000,
+                offset=offset,
+            )
+            tenants.update(_distinct_tenant_ids(page))
+            if offset is None:
+                break
+        return sorted(tenants)

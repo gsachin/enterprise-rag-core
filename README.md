@@ -37,7 +37,7 @@ Zero-infrastructure mode (no Qdrant / Elasticsearch / Redis):
 | Vector store | `qdrant`, `chroma`, `memory` | `chroma` |
 | Keyword leg | `elasticsearch`, `bm25` (in-memory), `none` | `bm25` |
 | Semantic cache | `redisvl` (Redis Stack), `memory`, `none` | `none` |
-| Embeddings | `ollama` (`OLLAMA_URL` / `EMBED_MODEL`), `mlx` (OpenAI-compatible `/v1/embeddings`) | `auto` — MLX on macOS Apple Silicon, Ollama elsewhere (CUDA/Linux/Windows) |
+| Embeddings | `ollama` (`OLLAMA_URL` / `EMBED_MODEL`), `mlx` / `vllm` / `openai` (OpenAI-compatible `/v1/embeddings`) | `auto` — OS auto-configuration: MLX on macOS Apple Silicon, vLLM where an NVIDIA GPU is detected, Ollama elsewhere |
 | Auth | `none` (default tenant), `oidc` (JWT/JWKS) | `none` |
 
 Environment variables (all `RAG_CORE_*`):
@@ -58,10 +58,11 @@ Environment variables (all `RAG_CORE_*`):
 | `RAG_CORE_OIDC_ISSUER` / `RAG_CORE_OIDC_AUDIENCE` | — | OIDC verification endpoints |
 | `RAG_CORE_DEFAULT_TENANT` | `default` | Tenant used in `none` auth mode |
 | `RAG_CORE_DEFAULT_CLEARANCE` | `0` | Clearance used in `none` auth mode |
-| `RAG_CORE_EMBED_BACKEND` | `auto` | `auto` \| `ollama` \| `mlx` — auto picks MLX on macOS Apple Silicon, Ollama elsewhere |
-| `RAG_CORE_MLX_BASE_URL` | `http://127.0.0.1:8000/v1` | OpenAI-compatible MLX embedding server (vllm-mlx, mlx-serve, ...) |
+| `RAG_CORE_EMBED_BACKEND` | `auto` | `auto` \| `ollama` \| `mlx` \| `vllm` \| `openai` — auto picks MLX on macOS Apple Silicon, vLLM with a detected NVIDIA GPU, Ollama elsewhere |
+| `RAG_CORE_EMBED_BASE_URL` | — | Generic OpenAI-compatible base URL for `mlx`/`vllm`/`openai` (overrides the per-backend default and the legacy `RAG_CORE_MLX_BASE_URL`) |
+| `RAG_CORE_MLX_BASE_URL` | `http://127.0.0.1:8000/v1` | Legacy mlx-specific OpenAI-compatible embedding server URL (vllm-mlx, mlx-serve, ...) |
 | `OLLAMA_URL` / `EMBED_MODEL` | `http://localhost:11434` / `nomic-embed-text` | Ollama embedding endpoint (app-compatible); `EMBED_MODEL` is also the model name for `mlx` |
-| `RAG_CORE_WARM_KEYWORD` | `1` | Repopulate the in-memory BM25 keyword leg from the vector store at service boot |
+| `RAG_CORE_WARM_KEYWORD` | `1` | Repopulate the in-memory BM25 keyword leg from the vector store at service boot: `0` off \| `1` default tenant \| `all` every tenant |
 
 ## Usage as a library
 

@@ -5,7 +5,11 @@ any consuming system can pick its cache backend.
 The redisvl imports are lazy (inside ``EnterpriseSemanticCache.__init__``) so
 the package core imports without the ``redisvl`` extra installed — behavior is
 otherwise unchanged from the verified seed code.
+
+Realtime-readiness (Phase 0): the in-memory variant's cosine lookup is
+CPU-bound, so it runs in a worker thread via ``asyncio.to_thread``.
 """
+import asyncio
 import json
 from typing import Any, Callable
 
@@ -130,13 +134,18 @@ class InMemorySemanticCache:
 
         key = (tenant_id, schema_version)
         now = time.monotonic()
-        best, best_dist = None, None
-        for entry in self._entries.get(key, []):
-            if now - entry["ts"] > self._ttl:
-                continue
-            dist = self._cosine_distance(query_vector, entry["vector"])
-            if best_dist is None or dist < best_dist:
-                best, best_dist = entry, dist
+
+        def _lookup() -> tuple[dict[str, Any] | None, float | None]:
+            best, best_dist = None, None
+            for entry in self._entries.get(key, []):
+                if now - entry["ts"] > self._ttl:
+                    continue
+                dist = self._cosine_distance(query_vector, entry["vector"])
+                if best_dist is None or dist < best_dist:
+                    best, best_dist = entry, dist
+            return best, best_dist
+
+        best, best_dist = await asyncio.to_thread(_lookup)
         if best is not None and best_dist <= self._threshold:
             return best["payload"]
         return None

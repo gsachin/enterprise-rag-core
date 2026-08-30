@@ -4,7 +4,12 @@ A generalisation of the ``_MiniBM25`` scorer from the universityDemo
 ``app/rag.py`` (k1=1.5, b=0.75, same tokenizer) over full Chunk records with
 SecurityContext post-filtering. This is what lets a consuming system get the
 dual-leg hybrid with no Elasticsearch at all.
+
+Realtime-readiness (Phase 0): scoring and the index rebuild are CPU-bound
+synchronous work, so both are offloaded from the event loop via
+``asyncio.to_thread``.
 """
+import asyncio
 import math
 import re
 from collections import Counter
@@ -41,7 +46,7 @@ class BM25KeywordStore:
         for r in records:
             by_id[r.chunk_id] = r.to_chunk()
         self._chunks = list(by_id.values())
-        self._rebuild()
+        await asyncio.to_thread(self._rebuild)
 
     # ── scoring ──────────────────────────────────────────────────────────
 
@@ -71,6 +76,6 @@ class BM25KeywordStore:
         # Score against the whole corpus, then post-filter: BM25 has no
         # server-side filter, so a post-filter over a generous candidate pool
         # keeps recall for restricted principals (fetch limit*4 first).
-        scored = self._score(query_text, limit * 4)
+        scored = await asyncio.to_thread(self._score, query_text, limit * 4)
         out = [chunk for _s, chunk in scored if sec_ctx.matches(chunk)]
         return out[:limit]

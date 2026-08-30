@@ -1,6 +1,11 @@
 """ChromaDB vector-store adapter — lets the engine run against an existing
 ChromaDB collection (e.g. the universityDemo admissions knowledge base) with
-the same SecurityContext semantics as the Qdrant adapter."""
+the same SecurityContext semantics as the Qdrant adapter.
+
+Realtime-readiness (Phase 0): the Chroma SDK is synchronous, so every SDK call
+is offloaded from the event loop via ``asyncio.to_thread`` — a blocking query
+would stall every concurrent session in a voice server."""
+import asyncio
 from typing import Any
 
 from enterprise_rag.model import Chunk, UpsertRecord
@@ -51,7 +56,8 @@ class ChromaVectorStore:
 
     async def search(self, query_vector: list[float],
                      sec_ctx: SecurityContext, limit: int) -> list[Chunk]:
-        res = self._collection.query(
+        res = await asyncio.to_thread(
+            self._collection.query,
             query_embeddings=[query_vector],
             n_results=limit,
             where=build_chroma_where(sec_ctx),
@@ -70,7 +76,9 @@ class ChromaVectorStore:
         return sorted(out, key=lambda c: -c.score)
 
     async def get_by_ids(self, ids: list[str], tenant_id: str) -> list[Chunk]:
-        res = self._collection.get(ids=ids, include=["documents", "metadatas"])
+        res = await asyncio.to_thread(
+            self._collection.get, ids=ids, include=["documents", "metadatas"],
+        )
         out = []
         for i, chunk_id in enumerate(res.get("ids") or []):
             meta = (res.get("metadatas") or [])[i] or {}
@@ -83,7 +91,8 @@ class ChromaVectorStore:
     async def upsert(self, records: list[UpsertRecord]) -> None:
         if not records:
             return
-        self._collection.upsert(
+        await asyncio.to_thread(
+            self._collection.upsert,
             ids=[r.chunk_id for r in records],
             documents=[r.content for r in records],
             metadatas=[
@@ -100,7 +109,8 @@ class ChromaVectorStore:
         )
 
     async def delete_by_parent(self, parent_id: str, tenant_id: str) -> int:
-        res = self._collection.get(
+        res = await asyncio.to_thread(
+            self._collection.get,
             where={"$and": [
                 {"parent_id": {"$eq": parent_id}},
                 {"tenant_id": {"$eq": tenant_id}},
@@ -109,11 +119,12 @@ class ChromaVectorStore:
         )
         ids = res.get("ids") or []
         if ids:
-            self._collection.delete(ids=ids)
+            await asyncio.to_thread(self._collection.delete, ids=ids)
         return len(ids)
 
     async def get_all(self, tenant_id: str) -> list[Chunk]:
-        res = self._collection.get(
+        res = await asyncio.to_thread(
+            self._collection.get,
             where={self._tenant_field: {"$eq": tenant_id}},
             include=["documents", "metadatas"],
         )
@@ -123,3 +134,13 @@ class ChromaVectorStore:
             doc = (res.get("documents") or [])[i] or ""
             out.append(_to_chunk(chunk_id, doc, meta, 0.0))
         return out
+
+    async def list_tenants(self) -> list[str]:
+        """Distinct tenant ids present in the collection (bulk admin — warm-all,
+        migrations). Reads metadata only, offloaded like every other SDK call."""
+        res = await asyncio.to_thread(self._collection.get, include=["metadatas"])
+        return sorted({
+            str(meta.get(self._tenant_field, ""))
+            for meta in (res.get("metadatas") or [])
+            if meta and meta.get(self._tenant_field)
+        })

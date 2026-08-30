@@ -71,8 +71,10 @@ def cmd_serve(args: argparse.Namespace) -> int:
     import uvicorn
 
     app = build_app(EngineConfig.from_env())
-    if os.environ.get("RAG_CORE_WARM_KEYWORD", "1") != "0":
-        warmed = asyncio.run(warm_keyword_from_vector_store(app.state.stack))
+    warm_mode = os.environ.get("RAG_CORE_WARM_KEYWORD", "1")
+    if warm_mode != "0":
+        tenants = "all" if warm_mode == "all" else None
+        warmed = asyncio.run(warm_keyword_from_vector_store(app.state.stack, tenants=tenants))
         if warmed:
             print(f"keyword leg warmed with {warmed} chunks")
         else:
@@ -105,8 +107,10 @@ def cmd_serve_stdio(args: argparse.Namespace) -> int:
 
     async def run() -> None:
         try:
-            if os.environ.get("RAG_CORE_WARM_KEYWORD", "1") != "0":
-                warmed = await warm_keyword_from_vector_store(stack)
+            warm_mode = os.environ.get("RAG_CORE_WARM_KEYWORD", "1")
+            if warm_mode != "0":
+                tenants = "all" if warm_mode == "all" else None
+                warmed = await warm_keyword_from_vector_store(stack, tenants=tenants)
                 if warmed:
                     print(f"keyword leg warmed with {warmed} chunks", file=sys.stderr)
             await mcp.run_stdio_async()

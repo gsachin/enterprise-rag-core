@@ -20,33 +20,13 @@ from mcp.server.auth.settings import AuthSettings
 os.environ["REDIS_STACK_URL"] = os.environ.get("REDIS_STACK_URL", "redis://localhost:6379")
 os.environ["RAG_TENANT_ID"] = "acme"
 
-# server.py constructs EnterpriseSemanticCache with embed_sync as the
-# CustomVectorizer dimension probe — patch the embedder BEFORE importing
-# server.py so no live Ollama endpoint is needed in this test.
-import enterprise_rag.hybrid as hybrid
-
-hybrid.OllamaEmbeddingClient.embed_sync = lambda self, text: [0.0] * 768  # type: ignore[method-assign]
-
-# server.py also constructs the RedisVL cache at import (index creation
-# connects to Redis). Stub the cache class so the boot test stays hermetic —
-# the real cache round-trip is covered by test_cache_redis.py (redis-marked).
-import enterprise_rag.cache as cache_mod
-
-
-class _StubCache:
-    def __init__(self, *args, **kwargs):
-        pass
-
-    async def get(self, *args, **kwargs):
-        return None
-
-    async def put(self, *args, **kwargs):
-        return None
-
-
-cache_mod.EnterpriseSemanticCache = _StubCache  # type: ignore[assignment]
-
-import enterprise_rag.server as server  # noqa: E402  # §6 transcript
+# server.py's module-scope ``mcp = build_mcp()`` constructs no engine stack
+# and no cache (the stack is only built by build_app), so importing it is
+# hermetic without any patching. Phase 0 note: earlier revisions of this
+# file patched OllamaEmbeddingClient.embed_sync and EnterpriseSemanticCache
+# at module scope for a pre-refactor server — that leaked session-wide and
+# was removed.
+import enterprise_rag.server as server  # §6 transcript
 
 
 # ── stub orchestrator: echoes the security context derived from the token ──

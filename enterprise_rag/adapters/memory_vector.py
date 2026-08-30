@@ -1,5 +1,10 @@
 """Zero-infrastructure brute-force cosine vector store — tests, demos, and
-tiny corpora. Applies the SecurityContext as a post-filter predicate."""
+tiny corpora. Applies the SecurityContext as a post-filter predicate.
+
+Realtime-readiness (Phase 0): the numpy cosine scoring is CPU-bound, so the
+search scoring runs in a worker thread via ``asyncio.to_thread``."""
+import asyncio
+
 import numpy as np
 
 from enterprise_rag.model import Chunk, UpsertRecord
@@ -21,13 +26,16 @@ class InMemoryVectorStore:
 
     async def search(self, query_vector: list[float],
                      sec_ctx: SecurityContext, limit: int) -> list[Chunk]:
-        scored = [
-            (_cos_sim(query_vector, vec), rec)
-            for rec, vec in self._records.values()
-            if sec_ctx.matches(rec.to_chunk())
-        ]
-        scored.sort(key=lambda pair: -pair[0])
-        return [rec.to_chunk(score=s) for s, rec in scored[:limit]]
+        def _score_all() -> list[Chunk]:
+            scored = [
+                (_cos_sim(query_vector, vec), rec)
+                for rec, vec in self._records.values()
+                if sec_ctx.matches(rec.to_chunk())
+            ]
+            scored.sort(key=lambda pair: -pair[0])
+            return [rec.to_chunk(score=s) for s, rec in scored[:limit]]
+
+        return await asyncio.to_thread(_score_all)
 
     async def get_by_ids(self, ids: list[str], tenant_id: str) -> list[Chunk]:
         out = []
@@ -56,3 +64,8 @@ class InMemoryVectorStore:
             for rec, _vec in self._records.values()
             if rec.tenant_id == tenant_id
         ]
+
+    async def list_tenants(self) -> list[str]:
+        """Distinct tenant ids present in the store (bulk admin — warm-all,
+        migrations)."""
+        return sorted({rec.tenant_id for rec, _vec in self._records.values()})
