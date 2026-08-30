@@ -6,6 +6,7 @@
 #   none — no token layer, every request runs as the configured default tenant
 import asyncio
 import json
+from dataclasses import asdict, replace
 
 import jwt
 from pydantic import AnyHttpUrl
@@ -19,6 +20,7 @@ from mcp.server.mcpserver.context import Context
 from enterprise_rag.security import SecurityContext                          # §1
 from enterprise_rag.orchestrator import AgentContextRequest                  # §3
 from enterprise_rag.config import EngineConfig
+from enterprise_rag.interview import Question, group_questions, question_refs
 
 
 class OIDCJWTVerifier(TokenVerifier):
@@ -104,6 +106,26 @@ async def _engine() -> object:
     return agent_engine
 
 
+# ── Vector-store seam ────────────────────────────────────────────────────────
+# Wired by build_app() alongside the engine (replaced in tests). Question-bank
+# tools read the store directly (get_all + deterministic id grouping).
+
+agent_vector_store = None
+
+
+def _set_vector_store(store) -> None:
+    global agent_vector_store
+    agent_vector_store = store
+
+
+async def _vector_store() -> object:
+    if agent_vector_store is None:
+        raise RuntimeError(
+            "server not wired — call build_app() (or set server.agent_vector_store)"
+        )
+    return agent_vector_store
+
+
 # ── Tool: OIDC mode ───────────────────────────────────────────────────────
 
 async def execute_agent_context(
@@ -171,6 +193,95 @@ async def retrieve_context(
     return json.dumps(_chunks_payload(chunks), indent=2)
 
 
+# ── Tools: interview question banks (OIDC mode) ─────────────────────────────
+
+def _question_payload(q: Question) -> dict:
+    return {
+        "question_id": q.question_id,
+        "section_title": q.section_title,
+        "chunks": [
+            {"chunk_id": c.chunk_id, "content": c.content} for c in q.chunks
+        ],
+    }
+
+
+async def _bank_questions(doc_id: str, tenant_id: str) -> list[Question]:
+    chunks = await (await _vector_store()).get_all(tenant_id)
+    return group_questions([c for c in chunks if c.parent_id == doc_id], doc_id)
+
+
+async def interview_bank(
+    doc_id: str,
+    ctx: Context | None = None,     # SDK-injected; excluded from the input schema
+) -> str:
+    """Lists the questions of a prepopulated question-bank document
+    (deterministic ids {doc_id}:s{section}:c{chunk}). Requires OAuth2 bearer
+    token with rag:retrieve."""
+    token = get_access_token()
+    if token is None:
+        raise ValueError("unauthenticated: this tool requires an OAuth2 bearer access token")
+    security = security_from_token(token)
+    questions = await _bank_questions(doc_id, security.tenant_id)
+    return json.dumps({
+        "doc_id": doc_id,
+        "tenant_id": security.tenant_id,
+        "questions": [asdict(r) for r in question_refs(questions)],
+        "count": len(questions),
+    }, indent=2)
+
+
+async def interview_question(
+    doc_id: str,
+    question_id: str,
+    ctx: Context | None = None,     # SDK-injected; excluded from the input schema
+) -> str:
+    """Fetches one full question from a question bank by its deterministic id
+    (no search — an exact get). Requires OAuth2 bearer token with
+    rag:retrieve."""
+    token = get_access_token()
+    if token is None:
+        raise ValueError("unauthenticated: this tool requires an OAuth2 bearer access token")
+    security = security_from_token(token)
+    questions = await _bank_questions(doc_id, security.tenant_id)
+    match = next((q for q in questions if q.question_id == question_id), None)
+    if match is None:
+        raise ValueError(f"unknown question {question_id!r} in bank {doc_id!r}")
+    return json.dumps({
+        "doc_id": doc_id,
+        "tenant_id": security.tenant_id,
+        **_question_payload(match),
+    }, indent=2)
+
+
+def _scope_domain(security: SecurityContext, domain: str) -> SecurityContext:
+    """Domain narrowing semantics: an explicit domain never widens token
+    scope. Empty domain = token departments as-is; a requested domain outside
+    the token's departments is refused."""
+    if not domain:
+        return security
+    if security.departments and domain not in security.departments:
+        raise ValueError(f"domain {domain!r} is outside the token's departments")
+    return replace(security, departments=[domain])
+
+
+async def interview_followup(
+    query: str,
+    domain: str = "",
+    top_k: int = 3,
+    ctx: Context | None = None,     # SDK-injected; excluded from the input schema
+) -> str:
+    """Domain-scoped hybrid retrieval for interview follow-ups and rubric
+    checks. ``domain`` maps to the question bank's department filter and
+    never widens the token's scope. Requires OAuth2 bearer token with
+    rag:retrieve."""
+    token = get_access_token()
+    if token is None:
+        raise ValueError("unauthenticated: this tool requires an OAuth2 bearer access token")
+    security = _scope_domain(security_from_token(token), domain)
+    chunks = await (await _engine()).retrieve_parallel(query, security, top_k)
+    return json.dumps(_chunks_payload(chunks), indent=2)
+
+
 # ── Tool: generic retrieval (none auth mode) ───────────────────────────────
 
 def _make_none_auth_retrieve_tool(config: EngineConfig):
@@ -190,6 +301,62 @@ def _make_none_auth_retrieve_tool(config: EngineConfig):
         return json.dumps(_chunks_payload(chunks), indent=2)
 
     return retrieve_context_defaults
+
+
+# ── Tools: interview question banks (none auth mode) ───────────────────────
+
+def _make_none_auth_interview_tools(config: EngineConfig):
+    """Tool variants for ``none`` auth mode: no bearer token, every request
+    runs as the configured default tenant; the follow-up tool takes the
+    domain from the request (department filter, no token to conflict with)."""
+
+    async def interview_bank_defaults(
+        doc_id: str,
+        ctx: Context | None = None,
+    ) -> str:
+        """Lists the questions of a prepopulated question-bank document.
+        No-auth mode: runs as the configured default tenant."""
+        questions = await _bank_questions(doc_id, config.default_tenant)
+        return json.dumps({
+            "doc_id": doc_id,
+            "tenant_id": config.default_tenant,
+            "questions": [asdict(r) for r in question_refs(questions)],
+            "count": len(questions),
+        }, indent=2)
+
+    async def interview_question_defaults(
+        doc_id: str,
+        question_id: str,
+        ctx: Context | None = None,
+    ) -> str:
+        """Fetches one full question from a question bank by its deterministic
+        id. No-auth mode: runs as the configured default tenant."""
+        questions = await _bank_questions(doc_id, config.default_tenant)
+        match = next((q for q in questions if q.question_id == question_id), None)
+        if match is None:
+            raise ValueError(f"unknown question {question_id!r} in bank {doc_id!r}")
+        return json.dumps({
+            "doc_id": doc_id,
+            "tenant_id": config.default_tenant,
+            **_question_payload(match),
+        }, indent=2)
+
+    async def interview_followup_defaults(
+        query: str,
+        domain: str = "",
+        top_k: int = 3,
+        ctx: Context | None = None,
+    ) -> str:
+        """Domain-scoped hybrid retrieval for interview follow-ups and rubric
+        checks. No-auth mode: runs as the configured default tenant with the
+        requested domain as the department filter."""
+        sec = replace(config.default_security(),
+                      departments=[domain] if domain else [])
+        chunks = await (await _engine()).retrieve_parallel(query, sec, top_k)
+        return json.dumps(_chunks_payload(chunks), indent=2)
+
+    return (interview_bank_defaults, interview_question_defaults,
+            interview_followup_defaults)
 
 
 # ── Tool: none auth mode ──────────────────────────────────────────────────
@@ -252,10 +419,17 @@ def build_mcp(config: EngineConfig | None = None) -> MCPServer:
         )
         mcp.add_tool(execute_agent_context)
         mcp.add_tool(retrieve_context)
+        mcp.add_tool(interview_bank)
+        mcp.add_tool(interview_question)
+        mcp.add_tool(interview_followup)
     else:
         mcp = MCPServer(name="enterprise-rag-core")
         mcp.add_tool(_make_none_auth_tool(config), name="execute_agent_context")
         mcp.add_tool(_make_none_auth_retrieve_tool(config), name="retrieve_context")
+        bank, question, followup = _make_none_auth_interview_tools(config)
+        mcp.add_tool(bank, name="interview_bank")
+        mcp.add_tool(question, name="interview_question")
+        mcp.add_tool(followup, name="interview_followup")
     return mcp
 
 
@@ -268,6 +442,7 @@ def build_app(config: EngineConfig | None = None):
     stack = config.build_stack()
     _set_orchestrator(stack.orchestrator)
     _set_engine(stack.engine)
+    _set_vector_store(stack.vector_store)
     mcp = build_mcp(config)
     app = mcp.streamable_http_app(streamable_http_path="/mcp")
     app.state.stack = stack

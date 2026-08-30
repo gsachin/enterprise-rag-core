@@ -105,6 +105,20 @@ sections; idempotent — reruns skip unless `--force`):
 Chunk ids are deterministic (`{doc_id}:s{section}:c{chunk}`), so a rebuild
 from the same corpus is stable.
 
+## Interview tools (Phase 1)
+
+Three MCP tools power the retrieval-backed mock interviewer (one `## ` section
+of a prepopulated markdown KB = one question; ids are deterministic):
+
+| Tool | Purpose |
+|---|---|
+| `interview_bank(doc_id)` | Question catalog of a bank (id, title, chunk count) — tenant-scoped |
+| `interview_question(doc_id, question_id)` | One full question by deterministic id — exact fetch, no search |
+| `interview_followup(query, domain, top_k)` | Domain-scoped hybrid retrieval (department filter; OIDC mode never widens token scope) |
+
+See `docs/TRD_PHASE1_INTERVIEW_TOOLS.md`; the consumer loop lives in the
+separate `mock-interviewer` repo.
+
 ## One-shot launcher (Windows)
 
 ```powershell

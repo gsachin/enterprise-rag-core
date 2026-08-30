@@ -58,7 +58,7 @@ Realtime-readiness (Phase 0, see `docs/TRD_PHASE0_REALTIME_READINESS.md`): block
 
 ### MCP server (design doc §6)
 
-Two auth modes: `oidc` (RS256 JWKS verification, required scope `rag:retrieve`, `SecurityContext` derived from JWT claims) or `none` (runs as configured default tenant/clearance). Tools: `execute_agent_context` and generic `retrieve_context`. `build_app()` builds the stack and wires it through module-level seams (`server.agent_orchestrator` / `server.agent_engine`) that tests replace; the stack is attached as `app.state.stack`. The module-scope `mcp = build_mcp()` at import is intentionally cheap — no stack, no SDK clients.
+Two auth modes: `oidc` (RS256 JWKS verification, required scope `rag:retrieve`, `SecurityContext` derived from JWT claims) or `none` (runs as configured default tenant/clearance). Tools: `execute_agent_context`, generic `retrieve_context`, and the Phase 1 interview tools — `interview_bank` / `interview_question` (deterministic question-bank fetch, helpers in `enterprise_rag/interview.py`) and `interview_followup` (domain-scoped hybrid, narrowing semantics in OIDC). `build_app()` builds the stack and wires it through module-level seams (`server.agent_orchestrator` / `server.agent_engine` / `server.agent_vector_store`) that tests replace — test fixtures must save/restore the seams (a leaked real orchestrator breaks `test_mcp_boot`); the stack is attached as `app.state.stack`. The module-scope `mcp = build_mcp()` at import is intentionally cheap — no stack, no SDK clients.
 
 ### Ingestion & prepopulation
 

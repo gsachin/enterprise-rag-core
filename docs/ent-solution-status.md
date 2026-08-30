@@ -26,8 +26,9 @@ semantic cache, live MCP boot). Revision log (17 rows) lives in the TRD.
 | 6 | Redis Stack tests against live Docker container | 69 passed, 0 skipped |
 | 7 | Generic `retrieve_context` MCP tool + engine seam, markdown KB prepopulation (idempotent, marker-gated), `get_all` protocol growth, BM25 boot warm-up, Windows launcher `start_services.ps1` | 88 passed |
 | 8 | **Phase 0 realtime-readiness** (see `docs/TRD_PHASE0_REALTIME_READINESS.md`): event-loop offload (`asyncio.to_thread`) for Chroma SDK calls, BM25 scoring/rebuild, memory-vector + in-memory cache cosine, and ONNX rerank; per-stage `timings_ms` instrumentation; `list_tenants` protocol growth + warm-all-tenants; embedding backend matrix `mlx`/`vllm`/`openai` + OS auto-configuration (MLX on Apple Silicon, vLLM with NVIDIA GPU, Ollama elsewhere); 50-session concurrency smoke; test-suite machine-independence fixes | 114 passed, 0 skipped |
+| 9 | **Phase 1 interview question-bank tools** (see `docs/TRD_PHASE1_INTERVIEW_TOOLS.md`): pure bank helpers (`interview.py`), `interview_bank`/`interview_question`/`interview_followup` MCP tools in both auth modes (domain narrowing in OIDC), vector-store seam; consumer-side scripted interview loop in the `mock-interviewer` repo (live gate: cache hit rate 1.0, 28–43 ms per question) | 121 passed, 2 warnings |
 
-**Current suite: 114 passed, 0 skipped** (with Redis Stack running; without it,
+**Current suite: 121 passed, 2 warnings** (with Redis Stack running; without it,
 the 2 redis-marked tests auto-skip). Model-dependent reranker tests auto-skip
 until `enterprise-rag-core download-model` has run.
 

@@ -97,12 +97,13 @@ def cmd_serve_stdio(args: argparse.Namespace) -> int:
     """stdio transport. No auth layer exists on stdio — the OIDC tool refuses
     to run without a bearer token, so use RAG_CORE_AUTH_MODE=none (default)."""
     from enterprise_rag.config import EngineConfig
-    from enterprise_rag.server import _set_engine, _set_orchestrator, build_mcp
+    from enterprise_rag.server import _set_engine, _set_orchestrator, _set_vector_store, build_mcp
 
     config = EngineConfig.from_env()
     stack = config.build_stack()
     _set_orchestrator(stack.orchestrator)
     _set_engine(stack.engine)
+    _set_vector_store(stack.vector_store)
     mcp = build_mcp(config)
 
     async def run() -> None:
