@@ -5,6 +5,7 @@ concurrently; latency is max(leg) + fusion overhead. Security filters are the
 adapters' responsibility on BOTH legs (design doc §1: identical, unbypassable).
 """
 import asyncio
+import json
 from dataclasses import replace
 
 import httpx
@@ -34,24 +35,55 @@ class OllamaEmbeddingClient:
 
     async def embed(self, text: str) -> list[float]:
         # target: <= 6 ms p95 (warm model, local network)
-        async with httpx.AsyncClient(timeout=5.0, transport=self._transport) as client:
-            resp = await client.post(
-                f"{self._base_url}/api/embeddings",
-                json={"model": self._model, "prompt": text},
-            )
-            resp.raise_for_status()
-        return resp.json()["embedding"]
+        vector = await self._embed_request(text)
+        return vector
+
+    async def _embed_request(self, text: str, *, attempts: int = 3) -> list[float]:
+        # Ollama unloads idle models (keep_alive) and returns
+        # {"embedding": []} with HTTP 200 while the runner reloads — retry with
+        # backoff across the reload window. An empty vector would otherwise die
+        # deep inside a vector-store SDK (observed live: IndexError in chromadb).
+        if not text:
+            raise ValueError("embed prompt must not be empty (Ollama returns [] for empty prompts)")
+        for attempt in range(attempts):
+            async with httpx.AsyncClient(timeout=5.0, transport=self._transport) as client:
+                resp = await client.post(
+                    f"{self._base_url}/api/embeddings",
+                    json={"model": self._model, "prompt": text},
+                )
+                resp.raise_for_status()
+            body = resp.json()
+            vector = body.get("embedding") or []
+            if vector:
+                return vector
+            if attempt < attempts - 1:
+                await asyncio.sleep(0.3 * (attempt + 1))
+        snippet = json.dumps(body)[:200] if isinstance(body, dict) else repr(body)[:200]
+        raise ValueError(
+            f"empty embedding from {self._base_url} for model {self._model!r}"
+            f" after {attempts} attempts — response: {snippet}"
+        )
 
     def embed_sync(self, text: str) -> list[float]:
         """Sync variant — for components that must probe vector dimensions at
-        construction time (the §5 RedisVL CustomVectorizer). Loop-independent."""
-        with httpx.Client(timeout=5.0, transport=self._sync_transport) as client:
-            resp = client.post(
-                f"{self._base_url}/api/embeddings",
-                json={"model": self._model, "prompt": text},
-            )
-            resp.raise_for_status()
-        return resp.json()["embedding"]
+        construction time (the §5 RedisVL CustomVectorizer). Loop-independent.
+        Same empty-embedding retry as the async path (the Ollama reload window
+        hits dimension probes too)."""
+        import time
+
+        for attempt in range(3):
+            with httpx.Client(timeout=5.0, transport=self._sync_transport) as client:
+                resp = client.post(
+                    f"{self._base_url}/api/embeddings",
+                    json={"model": self._model, "prompt": text},
+                )
+                resp.raise_for_status()
+            vector = resp.json().get("embedding") or []
+            if vector:
+                return vector
+            if attempt < 2:
+                time.sleep(0.3 * (attempt + 1))
+        raise ValueError(f"empty embedding from {self._base_url} for model {self._model!r}")
 
 
 class OpenAICompatibleEmbeddingClient:
@@ -75,13 +107,18 @@ class OpenAICompatibleEmbeddingClient:
         self._sync_transport = sync_transport
 
     async def embed(self, text: str) -> list[float]:
+        if not text:
+            raise ValueError("embed prompt must not be empty")
         async with httpx.AsyncClient(timeout=10.0, transport=self._transport) as client:
             resp = await client.post(
                 f"{self._base_url}/embeddings",
                 json={"model": self._model, "input": text},
             )
             resp.raise_for_status()
-        return list(resp.json()["data"][0]["embedding"])
+        data = (resp.json().get("data") or [])
+        if not data or not data[0].get("embedding"):
+            raise ValueError(f"empty embedding from {self._base_url} for model {self._model!r}")
+        return list(data[0]["embedding"])
 
     def embed_sync(self, text: str) -> list[float]:
         """Sync variant — dimension probes at construction time. Loop-independent."""
@@ -91,7 +128,10 @@ class OpenAICompatibleEmbeddingClient:
                 json={"model": self._model, "input": text},
             )
             resp.raise_for_status()
-        return list(resp.json()["data"][0]["embedding"])
+        data = (resp.json().get("data") or [])
+        if not data or not data[0].get("embedding"):
+            raise ValueError(f"empty embedding from {self._base_url} for model {self._model!r}")
+        return list(data[0]["embedding"])
 
 
 # ── Weighted RRF fusion ────────────────────────────────────────────────

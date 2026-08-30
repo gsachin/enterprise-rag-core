@@ -136,6 +136,12 @@ def test_interview_followup_filters_by_domain(wired):
     assert none_hits["count"] == 0
 
 
+def test_interview_followup_rejects_empty_query(wired):
+    _b, _q, followup = _none_tools(wired)
+    with pytest.raises(ValueError, match="empty"):
+        run(followup("   ", domain="system-design", top_k=3, ctx=None))
+
+
 def test_interview_bank_direct_call_refuses_without_token():
     async def direct_refusal():
         try:

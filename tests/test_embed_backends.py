@@ -42,6 +42,66 @@ def test_ollama_embed_wire_protocol():
     assert client.embed_sync("probe") == [0.1, 0.2, 0.3]
 
 
+# ── empty-embedding robustness (live-gate finding: Ollama warm-up race) ────
+
+def test_ollama_embed_retries_across_the_reload_window():
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        vector = [] if calls["n"] < 3 else [0.1, 0.2]  # empty while "reloading"
+        return httpx.Response(200, json={"embedding": vector}, request=request)
+
+    client = OllamaEmbeddingClient(
+        "http://ollama.test", "nomic-embed-text",
+        transport=httpx.MockTransport(handler),
+    )
+    assert run(client.embed("hello")) == [0.1, 0.2]
+    assert calls["n"] == 3      # two retries with backoff, then success
+
+
+def test_ollama_embed_raises_on_persistent_empty():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"embedding": []}, request=request)
+
+    client = OllamaEmbeddingClient(
+        "http://ollama.test", "nomic-embed-text",
+        transport=httpx.MockTransport(handler),
+        sync_transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(ValueError, match="empty embedding"):
+        run(client.embed("hello"))
+    with pytest.raises(ValueError, match="empty embedding"):
+        client.embed_sync("probe")
+
+
+def test_empty_prompt_rejected_before_any_request():
+    """Live-gate finding: embedding an empty string made Ollama answer
+    {"embedding": []}, which died deep inside the vector-store SDK."""
+    client = OllamaEmbeddingClient("http://ollama.test", "nomic-embed-text")
+    with pytest.raises(ValueError, match="empty"):
+        run(client.embed(""))
+
+    oai = OpenAICompatibleEmbeddingClient("http://x/v1", "bge")
+    with pytest.raises(ValueError, match="empty"):
+        run(oai.embed(""))
+
+
+def test_openai_compatible_raises_on_empty_data():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": []}, request=request)
+
+    client = OpenAICompatibleEmbeddingClient(
+        "http://vllm.test:8000/v1", "bge",
+        transport=httpx.MockTransport(handler),
+        sync_transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(ValueError, match="empty embedding"):
+        run(client.embed("hello"))
+    with pytest.raises(ValueError, match="empty embedding"):
+        client.embed_sync("probe")
+
+
 # ── wire protocol: OpenAI-compatible (MLX / vLLM) ─────────────────────────
 
 def test_openai_compatible_embed_wire_protocol():

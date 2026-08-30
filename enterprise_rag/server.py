@@ -277,6 +277,8 @@ async def interview_followup(
     token = get_access_token()
     if token is None:
         raise ValueError("unauthenticated: this tool requires an OAuth2 bearer access token")
+    if not query.strip():
+        raise ValueError("query must not be empty")
     security = _scope_domain(security_from_token(token), domain)
     chunks = await (await _engine()).retrieve_parallel(query, security, top_k)
     return json.dumps(_chunks_payload(chunks), indent=2)
@@ -350,6 +352,8 @@ def _make_none_auth_interview_tools(config: EngineConfig):
         """Domain-scoped hybrid retrieval for interview follow-ups and rubric
         checks. No-auth mode: runs as the configured default tenant with the
         requested domain as the department filter."""
+        if not query.strip():
+            raise ValueError("query must not be empty")
         sec = replace(config.default_security(),
                       departments=[domain] if domain else [])
         chunks = await (await _engine()).retrieve_parallel(query, sec, top_k)
