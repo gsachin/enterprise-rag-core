@@ -43,16 +43,25 @@ class OllamaEmbeddingClient:
         # {"embedding": []} with HTTP 200 while the runner reloads — retry with
         # backoff across the reload window. An empty vector would otherwise die
         # deep inside a vector-store SDK (observed live: IndexError in chromadb).
+        # ReadTimeout also retries: a shared Ollama instance serving a chat
+        # model alongside the embedding model can queue embeds past the 5s
+        # budget under memory pressure (observed live with llama3.2:3b).
         if not text:
             raise ValueError("embed prompt must not be empty (Ollama returns [] for empty prompts)")
         for attempt in range(attempts):
-            async with httpx.AsyncClient(timeout=5.0, transport=self._transport) as client:
-                resp = await client.post(
-                    f"{self._base_url}/api/embeddings",
-                    json={"model": self._model, "prompt": text},
-                )
-                resp.raise_for_status()
-            body = resp.json()
+            try:
+                async with httpx.AsyncClient(timeout=15.0, transport=self._transport) as client:
+                    resp = await client.post(
+                        f"{self._base_url}/api/embeddings",
+                        json={"model": self._model, "prompt": text},
+                    )
+                    resp.raise_for_status()
+                body = resp.json()
+            except httpx.ReadTimeout:
+                if attempt < attempts - 1:
+                    await asyncio.sleep(0.3 * (attempt + 1))
+                    continue
+                raise
             vector = body.get("embedding") or []
             if vector:
                 return vector
